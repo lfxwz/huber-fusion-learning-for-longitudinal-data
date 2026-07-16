@@ -14,11 +14,7 @@ For subject-specific coefficients $\beta_i$, the package minimizes an objective
 of the form
 
 ```math
-\begin{aligned}
-&\sum_{i=1}^{n}\sum_{t=1}^{T_i}
-\rho_c\!\left(\widetilde y_{it}-\widetilde x_{it}^{\mathsf T}\beta_i\right) \\
-&\quad + \sum_{i<j} p_\lambda\!\left(\lVert\beta_i-\beta_j\rVert_2\right).
-\end{aligned}
+\sum_{i=1}^{n}\sum_{t=1}^{T_i}\rho_c\!\left(\widetilde{y}_{it}-\widetilde{x}_{it}^{\mathsf{T}}\beta_i\right)+\sum_{i\lt j}p_\lambda\!\left(\lVert\beta_i-\beta_j\rVert_2\right)
 ```
 
 where $\rho_c$ is the Huber loss and $p_\lambda$ is either an L2 or MCP fusion
