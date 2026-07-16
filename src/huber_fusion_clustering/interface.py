@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from itertools import combinations
 from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
@@ -18,6 +19,7 @@ class ADMMClusterConfig:
     df: int = 4
     degree: int = 2
     intercept: bool = True
+    max_tensor_order: Optional[int] = 1
     huber_c: float = 0.75
     admm_rho: float = 1.0
     max_admm: int = 500
@@ -74,11 +76,39 @@ class ADMMClusterResult:
         n_basis = int(design_info["n_basis"])
         n_covariates = int(design_info["n_covariates"])
         offset = int(bool(design_info["has_intercept"]))
-        expected_rows = offset + n_basis * n_covariates
+        expected_rows = int(design_info["n_columns"])
         if self.beta_hat.shape[0] != expected_rows:
             raise RuntimeError("Fitted coefficient dimensions do not match design metadata.")
-        spline_coefs = self.beta_hat[offset:, :].T
+        main_effect_end = offset + n_basis * n_covariates
+        spline_coefs = self.beta_hat[offset:main_effect_end, :].T
         return spline_coefs.reshape(self.beta_hat.shape[1], n_covariates, n_basis)
+
+    def tensor_coefficient_blocks(self) -> Dict[tuple[int, ...], np.ndarray]:
+        """Return every spline block keyed by its zero-based predictor subset."""
+        design_info = self.info.get("design", {})
+        if design_info.get("kind") != "additive_spline":
+            raise ValueError(
+                "tensor_coefficient_blocks() is available only when the model "
+                "is fitted with covariates=."
+            )
+
+        n_basis = int(design_info["n_basis"])
+        offset = int(bool(design_info["has_intercept"]))
+        subsets = [tuple(int(j) for j in subset) for subset in design_info["tensor_subsets"]]
+        expected_rows = int(design_info["n_columns"])
+        if self.beta_hat.shape[0] != expected_rows:
+            raise RuntimeError("Fitted coefficient dimensions do not match design metadata.")
+
+        blocks: Dict[tuple[int, ...], np.ndarray] = {}
+        start = offset
+        n_subjects = self.beta_hat.shape[1]
+        for subset in subsets:
+            block_width = n_basis ** len(subset)
+            stop = start + block_width
+            block_shape = (n_subjects,) + (n_basis,) * len(subset)
+            blocks[subset] = self.beta_hat[start:stop, :].T.reshape(block_shape)
+            start = stop
+        return blocks
 
     def subject_intercepts(self) -> np.ndarray:
         """Return subject-specific intercepts from an additive-spline fit."""
@@ -342,10 +372,22 @@ def _build_additive_spline_xlist(
             raise ValueError(f"covariate x{j + 1} must contain at least two distinct values.")
         bounds.append((lower_bound, upper_bound))
 
+    if cfg.max_tensor_order is None:
+        max_tensor_order = n_covariates
+    else:
+        max_tensor_order = int(cfg.max_tensor_order)
+        if max_tensor_order < 1:
+            raise ValueError("max_tensor_order must be at least 1 or None.")
+        max_tensor_order = min(max_tensor_order, n_covariates)
+
+    tensor_subsets: list[tuple[int, ...]] = []
+    for order in range(1, max_tensor_order + 1):
+        tensor_subsets.extend(combinations(range(n_covariates), order))
+
     xlist: list[np.ndarray] = []
     n_basis: Optional[int] = None
     for Zi in covariate_list:
-        blocks = [np.ones((Zi.shape[0], 1), dtype=float)] if cfg.intercept else []
+        basis_blocks: list[np.ndarray] = []
         for j, (lower_bound, upper_bound) in enumerate(bounds):
             basis = create_bspline_basis_manual(
                 Zi[:, j],
@@ -359,17 +401,44 @@ def _build_additive_spline_xlist(
             )
             if n_basis is None:
                 n_basis = int(basis.shape[1])
-            blocks.append(basis)
+            basis_blocks.append(basis)
+
+        blocks = [np.ones((Zi.shape[0], 1), dtype=float)] if cfg.intercept else []
+        for subset in tensor_subsets:
+            tensor_block = basis_blocks[subset[0]]
+            for variable_index in subset[1:]:
+                tensor_block = (
+                    tensor_block[:, :, None]
+                    * basis_blocks[variable_index][:, None, :]
+                ).reshape(Zi.shape[0], -1)
+            blocks.append(tensor_block)
         xlist.append(np.concatenate(blocks, axis=1))
 
     block_order = ["intercept"] if cfg.intercept else []
-    block_order.extend(f"x{j + 1}" for j in range(n_covariates))
+    block_order.extend(
+        ":".join(f"x{j + 1}" for j in subset)
+        for subset in tensor_subsets
+    )
+    n_columns = int(cfg.intercept) + sum(
+        int(n_basis or 0) ** len(subset)
+        for subset in tensor_subsets
+    )
     return xlist, {
         "kind": "additive_spline",
+        "design_mode": (
+            "additive"
+            if max_tensor_order == 1
+            else "full_tensor"
+            if max_tensor_order == n_covariates
+            else "hierarchical_tensor"
+        ),
+        "max_tensor_order": max_tensor_order,
         "n_basis": int(n_basis or 0),
         "n_covariates": n_covariates,
+        "n_columns": n_columns,
         "has_intercept": bool(cfg.intercept),
         "block_order": block_order,
+        "tensor_subsets": [list(subset) for subset in tensor_subsets],
         "covariate_bounds": [[lower, upper] for lower, upper in bounds],
     }
 

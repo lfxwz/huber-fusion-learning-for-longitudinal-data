@@ -34,6 +34,21 @@ range to define common spline knots across subjects. Fusion is applied jointly
 to the intercept and all predictor-specific spline coefficients. No time
 variable is required for this interface.
 
+The interaction order is controlled by `max_tensor_order`. For every predictor
+subset $S\subseteq\{1,\ldots,p\}$ satisfying
+$1\le |S|\le R$, where $R$ is the selected maximum order, the design includes
+$\bigotimes_{j\in S}B_j(x_j)$. Consequently,
+
+```math
+y_{ik}=\alpha_i+\sum_{1\le |S|\le R}\left\langle\Theta_{iS},\bigotimes_{j\in S}B_j(x_{ikj})\right\rangle+\varepsilon_{ik}.
+```
+
+`max_tensor_order=1` gives the additive model, `max_tensor_order=2` adds every
+pairwise tensor interaction for any number of predictors, and
+`max_tensor_order=None` expands through the full $p$-way interaction. With $q$
+spline terms per predictor and an intercept, the coefficient dimension is
+$\sum_{r=0}^{R}\binom{p}{r}q^r$; the unrestricted case has $(1+q)^p$ columns.
+
 Within-subject dependence is represented by a working covariance matrix
 $V_i$. Writing $V_i=L_iL_i^{\mathsf T}$, the solver pre-whitens each subject as
 $\widetilde y_i=L_i^{-1}y_i$ and $\widetilde X_i=L_i^{-1}X_i$. Covariance
@@ -113,6 +128,7 @@ valid score is returned. Candidate values can be evaluated in parallel through
 - L2 and MCP fusion penalties
 - Support for equal- and unequal-length trajectories
 - Multiple predictors with a separate B-spline expansion for each predictor
+- Adaptive tensor products with a configurable maximum interaction order
 - Threshold-based cluster extraction
 - Calinski-Harabasz tuning-parameter selection
 - Reproducible synthetic contamination utilities
@@ -143,13 +159,16 @@ covariates = rng.uniform(-1.0, 1.0, size=(n_subjects, n_observations, 2))
 group = np.repeat([0, 1], n_subjects // 2)
 x1 = covariates[:, :, 0]
 x2 = covariates[:, :, 1]
-mean_a = 0.4 + 0.9 * x1 + 0.3 * x1**2 - 0.6 * x2 + 0.4 * x2**2
-mean_b = 1.4 - 0.8 * x1 + 0.2 * x1**2 + 0.7 * x2 - 0.3 * x2**2
+mean_a = 0.4 + 0.9 * x1 + 0.3 * x1**2 - 0.6 * x2 + 0.8 * x1 * x2
+mean_b = 1.4 - 0.8 * x1 + 0.2 * x1**2 + 0.7 * x2 - 0.8 * x1 * x2
 y = np.where(group[:, None] == 0, mean_a, mean_b)
 y += rng.normal(0.0, 0.08, size=y.shape)
 
 config = ADMMClusterConfig(
     lam_grid=np.linspace(0.0001, 1.0, 30).tolist(),
+    df=4,
+    degree=2,
+    max_tensor_order=2,
     tau_cluster=0.20,
     min_cluster_size=2,
     max_admm=150,
@@ -158,11 +177,16 @@ config = ADMMClusterConfig(
 )
 
 model = HuberFusionClusterer(config)
-labels = model.fit_predict(y=y, covariates=covariates)
+labels = model.fit_predict(
+    y=y,
+    covariates=covariates,
+    V=np.eye(n_observations),
+)
 
 print("Selected lambda:", model.result_.best_lambda)
 print("Cluster labels:", labels)
 print("Coefficient blocks:", model.result_.coefficient_blocks().shape)
+print("Interaction block:", model.result_.tensor_coefficient_blocks()[(0, 1)].shape)
 ```
 
 A complete runnable version is available in
@@ -196,6 +220,12 @@ these as `covariates=` without `t=`. The existing `t=` interface remains
 available for a time-only spline model, and `X=` remains available for an
 already constructed design matrix.
 
+Use `max_tensor_order=2` to include every pairwise tensor block regardless of
+whether the input contains 2, 10, or 20 predictors. Set it to `None` to include
+all orders. Predictor indices in `tensor_coefficient_blocks()` are zero based:
+`(0,)` is the first main effect, `(0, 1)` is the first-second interaction, and
+`(0, 1, 2)` is the corresponding three-way interaction when enabled.
+
 ## Data policy
 
 This repository contains source code and a synthetic example only. It does not
@@ -209,6 +239,9 @@ documents.
   computationally intensive.
 - Results can be sensitive to the fusion grid and cluster threshold; these
   settings should be chosen for the scale of the application.
+- A tensor design through order $R$ has
+  $\sum_{r=0}^{R}\binom{p}{r}q^r$ columns; the unrestricted full-order design
+  grows exponentially as $(1+q)^p$.
 
 ## License
 
