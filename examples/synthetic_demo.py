@@ -1,4 +1,4 @@
-"""Run fusion clustering with a multivariable longitudinal design."""
+"""Run fusion clustering with multiple spline-expanded predictors."""
 
 from __future__ import annotations
 
@@ -7,37 +7,48 @@ import numpy as np
 from huber_fusion_clustering import ADMMClusterConfig, HuberFusionClusterer
 
 
-def make_synthetic_data(random_state: int = 42) -> tuple[np.ndarray, np.ndarray]:
-    """Create two trajectory groups from four-column subject-level designs."""
+def make_synthetic_data(
+    random_state: int = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Create two groups with three nonlinear predictor effects."""
     rng = np.random.default_rng(random_state)
     n_per_group = 30
     n_subjects = 2 * n_per_group
-    time = np.linspace(0.0, 1.0, 50)
-    exposure = rng.normal(0.0, 1.0, size=(n_subjects, time.size))
+    n_observations = 50
+    covariates = rng.uniform(-1.0, 1.0, size=(n_subjects, n_observations, 3))
+    x1 = covariates[:, :, 0]
+    x2 = covariates[:, :, 1]
+    x3 = covariates[:, :, 2]
 
-    design = np.empty((n_subjects, time.size, 4), dtype=float)
-    design[:, :, 0] = 1.0
-    design[:, :, 1] = time
-    design[:, :, 2] = np.sin(2.0 * np.pi * time)
-    design[:, :, 3] = exposure
-
-    beta_group_a = np.array([0.5, 1.2, 0.35, 0.45])
-    beta_group_b = np.array([1.8, -0.8, -0.25, -0.45])
-    coefficients = np.vstack(
-        [
-            np.tile(beta_group_a, (n_per_group, 1)),
-            np.tile(beta_group_b, (n_per_group, 1)),
-        ]
+    group_a = (
+        0.4
+        + 0.9 * x1
+        + 0.3 * x1**2
+        - 0.6 * x2
+        + 0.4 * x2**2
+        + 0.5 * x3
+        + 0.3 * x3**2
     )
-    noise = rng.normal(0.0, 0.08, size=(n_subjects, time.size))
-    responses = np.einsum("ntd,nd->nt", design, coefficients) + noise
-    return responses, design
+    group_b = (
+        1.4
+        - 0.8 * x1
+        + 0.2 * x1**2
+        + 0.7 * x2
+        - 0.3 * x2**2
+        - 0.5 * x3
+        + 0.6 * x3**2
+    )
+    responses = np.vstack([group_a[:n_per_group], group_b[n_per_group:]])
+    responses += rng.normal(0.0, 0.08, size=responses.shape)
+    return responses, covariates
 
 
 def main() -> None:
-    responses, design = make_synthetic_data()
+    responses, covariates = make_synthetic_data()
     config = ADMMClusterConfig(
         lam_grid=np.linspace(0.0001, 1.0, 30).tolist(),
+        df=4,
+        degree=2,
         tau_cluster=0.20,
         min_cluster_size=2,
         max_admm=150,
@@ -45,13 +56,16 @@ def main() -> None:
         verbose=0,
     )
     model = HuberFusionClusterer(config)
-    labels = model.fit_predict(y=responses, X=design)
+    labels = model.fit_predict(y=responses, covariates=covariates)
 
     if model.result_ is None:
         raise RuntimeError("The model did not produce a fitted result.")
 
     counts = np.bincount(labels)
-    print(f"Design shape: {design.shape} (subjects, times, predictors)")
+    coefficient_blocks = model.result_.coefficient_blocks()
+    print(f"Covariate shape: {covariates.shape} (subjects, observations, predictors)")
+    print(f"Design shape per subject: {model.result_.xlist[0].shape}")
+    print(f"Coefficient blocks: {coefficient_blocks.shape} (subjects, functions, basis)")
     print(f"Selected lambda: {model.result_.best_lambda:.3f}")
     print(f"Number of clusters: {model.result_.n_clusters}")
     print(f"Cluster sizes: {counts.tolist()}")

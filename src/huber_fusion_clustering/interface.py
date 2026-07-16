@@ -62,6 +62,36 @@ class ADMMClusterResult:
         except ValueError:
             return values
 
+    def coefficient_blocks(self) -> np.ndarray:
+        """Return additive-spline estimates as ``(subject, predictor, basis)``."""
+        design_info = self.info.get("design", {})
+        if design_info.get("kind") != "additive_spline":
+            raise ValueError(
+                "coefficient_blocks() is available only when the model is fitted "
+                "with covariates=."
+            )
+
+        n_basis = int(design_info["n_basis"])
+        n_covariates = int(design_info["n_covariates"])
+        offset = int(bool(design_info["has_intercept"]))
+        expected_rows = offset + n_basis * n_covariates
+        if self.beta_hat.shape[0] != expected_rows:
+            raise RuntimeError("Fitted coefficient dimensions do not match design metadata.")
+        spline_coefs = self.beta_hat[offset:, :].T
+        return spline_coefs.reshape(self.beta_hat.shape[1], n_covariates, n_basis)
+
+    def subject_intercepts(self) -> np.ndarray:
+        """Return subject-specific intercepts from an additive-spline fit."""
+        design_info = self.info.get("design", {})
+        if design_info.get("kind") != "additive_spline":
+            raise ValueError(
+                "subject_intercepts() is available only when the model is fitted "
+                "with covariates=."
+            )
+        if not design_info.get("has_intercept", False):
+            raise ValueError("The fitted additive-spline model has no intercept.")
+        return self.beta_hat[0, :].copy()
+
 
 class HuberFusionClusterer:
     """High-level estimator for Huber-loss fusion clustering."""
@@ -77,9 +107,17 @@ class HuberFusionClusterer:
         t: Optional[Any] = None,
         X: Optional[Any] = None,
         V: Optional[Any] = None,
+        covariates: Optional[Any] = None,
     ) -> "HuberFusionClusterer":
         """Fit the model and store the fitted result."""
-        self.result_ = fit_admm_cluster(y=y, t=t, X=X, V=V, config=self.config)
+        self.result_ = fit_admm_cluster(
+            y=y,
+            t=t,
+            X=X,
+            V=V,
+            covariates=covariates,
+            config=self.config,
+        )
         self.labels_ = self.result_.labels.copy()
         return self
 
@@ -89,9 +127,10 @@ class HuberFusionClusterer:
         t: Optional[Any] = None,
         X: Optional[Any] = None,
         V: Optional[Any] = None,
+        covariates: Optional[Any] = None,
     ) -> np.ndarray:
         """Fit the model and return cluster labels."""
-        self.fit(y=y, t=t, X=X, V=V)
+        self.fit(y=y, t=t, X=X, V=V, covariates=covariates)
         if self.labels_ is None:
             raise RuntimeError("The fitted labels are unavailable.")
         return self.labels_.copy()
@@ -102,6 +141,7 @@ def fit_admm_cluster(
     t: Optional[Any] = None,
     X: Optional[Any] = None,
     V: Optional[Any] = None,
+    covariates: Optional[Any] = None,
     *,
     config: Optional[ADMMClusterConfig] = None,
     true_labels: Optional[Sequence[int]] = None,
@@ -125,23 +165,54 @@ def fit_admm_cluster(
         Optional covariance matrices. If supplied, these matrices are used
         directly. If None, an AR(1) working covariance is estimated from
         initial ridge residuals.
+    covariates
+        Optional raw predictors for a multivariable additive-spline model.
+        Accepts a common matrix with shape (T, p), a list of n matrices with
+        shape (T_i, p), or an array with shape (n, T, p). Each predictor is
+        expanded separately, producing [1, B_1(x_1), ..., B_p(x_p)].
     true_labels
         Optional labels for evaluation only. The algorithm does not need k.
     """
     cfg = config or ADMMClusterConfig()
     ylist = _coerce_ylist(y)
-    if X is None and _looks_like_x_input(t):
+    if covariates is not None and X is not None:
+        raise ValueError("X and covariates cannot be supplied together.")
+    if covariates is not None and t is not None:
+        raise ValueError("t is not used with covariates; omit t for additive splines.")
+
+    if X is None and covariates is None and _looks_like_x_input(t):
         X = t
         t = None
-    if X is None:
+
+    if covariates is not None:
+        xlist, design_info = _build_additive_spline_xlist(
+            covariates,
+            n=len(ylist),
+            ylist=ylist,
+            cfg=cfg,
+        )
+    elif X is None:
         if t is None:
             raise ValueError("t is required when X is not supplied.")
         xlist = _build_xlist_from_t(t, n=len(ylist), ylist=ylist, cfg=cfg)
+        design_info = {
+            "kind": "time_spline",
+            "n_basis": int(xlist[0].shape[1]),
+            "n_covariates": 0,
+            "n_coefficient_functions": 1,
+        }
     else:
         xlist = _coerce_xlist(X, n=len(ylist), ylist=ylist)
+        design_info = {
+            "kind": "prebuilt",
+            "n_columns": int(xlist[0].shape[1]),
+        }
     cov_info: Dict[str, Any] = {"source": "provided" if V is not None else "estimated"}
     if V is None:
-        tlist_for_cov = _coerce_tlist(t, n=len(ylist), ylist=ylist) if X is None else _default_time_from_y(ylist)
+        if design_info["kind"] == "time_spline":
+            tlist_for_cov = _coerce_tlist(t, n=len(ylist), ylist=ylist)
+        else:
+            tlist_for_cov = _default_time_from_y(ylist)
         vlist, cov_info = estimate_covariance_from_residuals(
             xlist=xlist,
             ylist=ylist,
@@ -190,7 +261,7 @@ def fit_admm_cluster(
         n_clusters=int(np.unique(labels).size),
         metrics=metrics,
         history=ch_res.history,
-        info={**ch_res.best_info, "covariance": cov_info},
+        info={**ch_res.best_info, "covariance": cov_info, "design": design_info},
         xlist=xlist,
         ylist=ylist,
         vlist=vlist,
@@ -252,6 +323,113 @@ def _build_xlist_from_t(
     ]
 
 
+def _build_additive_spline_xlist(
+    covariates: Any,
+    *,
+    n: int,
+    ylist: Sequence[np.ndarray],
+    cfg: ADMMClusterConfig,
+) -> tuple[list[np.ndarray], Dict[str, Any]]:
+    covariate_list = _coerce_covariate_list(covariates, n=n, ylist=ylist)
+    n_covariates = int(covariate_list[0].shape[1])
+
+    bounds: list[tuple[float, float]] = []
+    for j in range(n_covariates):
+        pooled_values = np.concatenate([Zi[:, j] for Zi in covariate_list])
+        lower_bound = float(np.min(pooled_values))
+        upper_bound = float(np.max(pooled_values))
+        if lower_bound == upper_bound:
+            raise ValueError(f"covariate x{j + 1} must contain at least two distinct values.")
+        bounds.append((lower_bound, upper_bound))
+
+    xlist: list[np.ndarray] = []
+    n_basis: Optional[int] = None
+    for Zi in covariate_list:
+        blocks = [np.ones((Zi.shape[0], 1), dtype=float)] if cfg.intercept else []
+        for j, (lower_bound, upper_bound) in enumerate(bounds):
+            basis = create_bspline_basis_manual(
+                Zi[:, j],
+                # Build one extra basis and drop its bias column so each
+                # predictor retains exactly cfg.df identifiable spline terms.
+                df=cfg.df + 1,
+                degree=cfg.degree,
+                intercept=False,
+                lower_bound=lower_bound,
+                upper_bound=upper_bound,
+            )
+            if n_basis is None:
+                n_basis = int(basis.shape[1])
+            blocks.append(basis)
+        xlist.append(np.concatenate(blocks, axis=1))
+
+    block_order = ["intercept"] if cfg.intercept else []
+    block_order.extend(f"x{j + 1}" for j in range(n_covariates))
+    return xlist, {
+        "kind": "additive_spline",
+        "n_basis": int(n_basis or 0),
+        "n_covariates": n_covariates,
+        "has_intercept": bool(cfg.intercept),
+        "block_order": block_order,
+        "covariate_bounds": [[lower, upper] for lower, upper in bounds],
+    }
+
+
+def _coerce_covariate_list(
+    covariates: Any,
+    *,
+    n: int,
+    ylist: Sequence[np.ndarray],
+) -> list[np.ndarray]:
+    if isinstance(covariates, (list, tuple)):
+        is_subject_list = (
+            len(covariates) == n
+            and len(covariates) > 0
+            and np.asarray(covariates[0]).ndim == 2
+        )
+        if is_subject_list:
+            covariate_list = [np.asarray(Zi, dtype=float) for Zi in covariates]
+        else:
+            arr = np.asarray(covariates, dtype=float)
+            if arr.ndim != 2:
+                raise ValueError(
+                    "A covariate list must either contain one matrix per subject "
+                    "or represent one common 2D matrix."
+                )
+            covariate_list = [arr.copy() for _ in range(n)]
+    else:
+        arr = np.asarray(covariates, dtype=float)
+        if arr.ndim == 2:
+            covariate_list = [arr.copy() for _ in range(n)]
+        elif arr.ndim == 3:
+            if arr.shape[0] != n:
+                raise ValueError(
+                    "When covariates is 3D, covariates.shape[0] must equal "
+                    "the number of subjects."
+                )
+            covariate_list = [arr[i, :, :] for i in range(n)]
+        else:
+            raise ValueError(
+                "covariates must be a common 2D matrix, a 3D array with shape "
+                "(n, T, p), or a list of subject-specific 2D matrices."
+            )
+
+    n_covariates: Optional[int] = None
+    for i, (Zi, yi) in enumerate(zip(covariate_list, ylist)):
+        if Zi.ndim != 2:
+            raise ValueError(f"covariates[{i}] must be 2D.")
+        if Zi.shape[0] != yi.shape[0]:
+            raise ValueError(f"covariates[{i}] rows must match y[{i}] length.")
+        if Zi.shape[1] == 0:
+            raise ValueError("covariates must contain at least one predictor.")
+        if not np.all(np.isfinite(Zi)):
+            raise ValueError(f"covariates[{i}] contains non-finite values.")
+        if n_covariates is None:
+            n_covariates = int(Zi.shape[1])
+        elif Zi.shape[1] != n_covariates:
+            raise ValueError("All covariate matrices must have the same number of columns.")
+    return covariate_list
+
+
 def _coerce_tlist(t: Any, *, n: int, ylist: Sequence[np.ndarray]) -> list[np.ndarray]:
     if isinstance(t, (list, tuple)):
         if len(t) != n:
@@ -269,7 +447,14 @@ def _coerce_tlist(t: Any, *, n: int, ylist: Sequence[np.ndarray]) -> list[np.nda
     return tlist
 
 
-def create_bspline_basis_manual(t: Any, df: int = 4, degree: int = 2, intercept: bool = True) -> np.ndarray:
+def create_bspline_basis_manual(
+    t: Any,
+    df: int = 4,
+    degree: int = 2,
+    intercept: bool = True,
+    lower_bound: Optional[float] = None,
+    upper_bound: Optional[float] = None,
+) -> np.ndarray:
     """Build a B-spline design matrix for a one-dimensional time vector."""
     t = np.asarray(t, dtype=float).reshape(-1)
     n = len(t)
@@ -278,15 +463,22 @@ def create_bspline_basis_manual(t: Any, df: int = 4, degree: int = 2, intercept:
     if n == 0:
         raise ValueError("t must contain at least one time point.")
 
+    lower = float(t.min()) if lower_bound is None else float(lower_bound)
+    upper = float(t.max()) if upper_bound is None else float(upper_bound)
+    if upper <= lower:
+        raise ValueError("upper_bound must be greater than lower_bound.")
+    if np.any(t < lower) or np.any(t > upper):
+        raise ValueError("All time points must lie within the spline bounds.")
+
     if n_knots > 0:
-        internal_knots = np.linspace(t.min(), t.max(), n_knots + 2)[1:-1]
+        internal_knots = np.linspace(lower, upper, n_knots + 2)[1:-1]
     else:
         internal_knots = np.array([])
 
     knots = np.concatenate([
-        np.repeat(t.min(), degree + 1),
+        np.repeat(lower, degree + 1),
         internal_knots,
-        np.repeat(t.max(), degree + 1),
+        np.repeat(upper, degree + 1),
     ])
 
     k = len(knots)
@@ -308,7 +500,7 @@ def create_bspline_basis_manual(t: Any, df: int = 4, degree: int = 2, intercept:
 
     for j in range(n):
         for i in range(n_basis):
-            if t[j] == t.max():
+            if t[j] == upper:
                 B[j, i] = 1.0 if i == n_basis - 1 else 0.0
             else:
                 B[j, i] = B_spline(i, degree, t[j], knots)

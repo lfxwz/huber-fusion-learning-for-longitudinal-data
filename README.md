@@ -19,6 +19,21 @@ model is $y_i\approx X_i\beta_i$. When only observation times are supplied,
 the package constructs a B-spline design matrix; a prebuilt design matrix can
 also be passed directly.
 
+For a univariate response with $p$ predictors, the package can construct an
+additive-spline design automatically. Let $B_j(x)$ contain $q$ identifiable
+B-spline terms for predictor $j$. For observation $k$ from subject $i$, the
+model is
+
+```math
+y_{ik}=\alpha_i+\sum_{j=1}^{p}B_j(x_{ikj})^{\mathsf T}\theta_{ij}+\varepsilon_{ik}.
+```
+
+Thus the subject-level design is $[1,\ B_1(x_{i1}),\ldots,B_p(x_{ip})]$, and
+each subject has $1+pq$ coefficients. Each predictor uses its own pooled value
+range to define common spline knots across subjects. Fusion is applied jointly
+to the intercept and all predictor-specific spline coefficients. No time
+variable is required for this interface.
+
 Within-subject dependence is represented by a working covariance matrix
 $V_i$. Writing $V_i=L_iL_i^{\mathsf T}$, the solver pre-whitens each subject as
 $\widetilde y_i=L_i^{-1}y_i$ and $\widetilde X_i=L_i^{-1}X_i$. Covariance
@@ -97,6 +112,7 @@ valid score is returned. Candidate values can be evaluated in parallel through
 - Huber-loss optimization with ADMM
 - L2 and MCP fusion penalties
 - Support for equal- and unequal-length trajectories
+- Multiple predictors with a separate B-spline expansion for each predictor
 - Threshold-based cluster extraction
 - Calinski-Harabasz tuning-parameter selection
 - Reproducible synthetic contamination utilities
@@ -120,11 +136,17 @@ import numpy as np
 from huber_fusion_clustering import ADMMClusterConfig, HuberFusionClusterer
 
 rng = np.random.default_rng(42)
-t = np.linspace(0.0, 1.0, 10)
+n_subjects = 60
+n_observations = 50
 
-group_a = [0.5 + 1.2 * t + rng.normal(0.0, 0.08, t.size) for _ in range(30)]
-group_b = [1.8 - 0.8 * t + rng.normal(0.0, 0.08, t.size) for _ in range(30)]
-y = np.asarray(group_a + group_b)
+covariates = rng.uniform(-1.0, 1.0, size=(n_subjects, n_observations, 2))
+group = np.repeat([0, 1], n_subjects // 2)
+x1 = covariates[:, :, 0]
+x2 = covariates[:, :, 1]
+mean_a = 0.4 + 0.9 * x1 + 0.3 * x1**2 - 0.6 * x2 + 0.4 * x2**2
+mean_b = 1.4 - 0.8 * x1 + 0.2 * x1**2 + 0.7 * x2 - 0.3 * x2**2
+y = np.where(group[:, None] == 0, mean_a, mean_b)
+y += rng.normal(0.0, 0.08, size=y.shape)
 
 config = ADMMClusterConfig(
     lam_grid=np.linspace(0.0001, 1.0, 30).tolist(),
@@ -136,10 +158,11 @@ config = ADMMClusterConfig(
 )
 
 model = HuberFusionClusterer(config)
-labels = model.fit_predict(y=y, t=t)
+labels = model.fit_predict(y=y, covariates=covariates)
 
 print("Selected lambda:", model.result_.best_lambda)
 print("Cluster labels:", labels)
+print("Coefficient blocks:", model.result_.coefficient_blocks().shape)
 ```
 
 A complete runnable version is available in
@@ -164,6 +187,14 @@ Responses may be supplied as either:
 
 Time points and covariance matrices may likewise be common across subjects or
 provided separately for each subject.
+
+Raw predictors for the additive-spline interface may be supplied as a
+three-dimensional array with shape `(n_subjects, n_observations, n_predictors)`,
+a common matrix with shape `(n_observations, n_predictors)`, or a list of
+subject-specific matrices with shape `(n_observations_i, n_predictors)`. Pass
+these as `covariates=` without `t=`. The existing `t=` interface remains
+available for a time-only spline model, and `X=` remains available for an
+already constructed design matrix.
 
 ## Data policy
 
