@@ -1,4 +1,4 @@
-# Huber Loss Fusion Clustering
+# Huber Fusion Learning for Longitudinal Data
 
 `huber-fusion-clustering` is a small Python package for robust subgroup
 discovery in longitudinal data. It combines a Huber-loss objective with fusion
