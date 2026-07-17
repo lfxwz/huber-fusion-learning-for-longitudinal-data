@@ -10,151 +10,117 @@ into the same cluster.
 
 ## Method
 
-### Subject-level multivariable model
+### Longitudinal representation
 
-For subject $i=1,\ldots,n$, let $T_i$ be the number of observations,
-$y_i=(y_{i1},\ldots,y_{iT_i})^{\mathsf T}\in\mathbb R^{T_i}$ the univariate
-response, and $Z_i\in\mathbb R^{T_i\times p}$ the raw predictor matrix. Its
-$(k,j)$ entry is denoted by $x_{ikj}$. Each subject has an individual response
-surface, and subgroup discovery is based on similarities among these surfaces.
+For subject $i=1,\ldots,n$, let $y_i\in\mathbb{R}^{T_i}$ denote the observed
+trajectory, $X_i\in\mathbb{R}^{T_i\times d}$ the design matrix, and
+$\beta_i\in\mathbb{R}^d$ a subject-specific coefficient vector. The working
+model is $y_i\approx X_i\beta_i$. When only observation times are supplied,
+the package constructs a B-spline design matrix; a prebuilt design matrix can
+also be passed directly.
 
-For continuous predictor $j$, let
-$B_j(x)=(B_{j1}(x),\ldots,B_{jq}(x))^{\mathsf T}$ be a reduced B-spline basis.
-The package uses common bounds for each predictor across subjects, removes the
-duplicated constant direction from every spline block, and retains one explicit
-subject-specific intercept $\alpha_i$.
-
-### Hierarchical tensor-product representation
-
-Let $R$ be the maximum interaction order and define
+For a univariate response with $p$ predictors, the package can construct an
+additive-spline design automatically. Let $B_j(x)$ contain $q$ identifiable
+B-spline terms for predictor $j$. For observation $k$ from subject $i$, the
+model is
 
 ```math
-\mathcal S_R=\left\{S\subseteq\{1,\ldots,p\}:1\le |S|\le R\right\}.
+y_{ik}=\alpha_i+\sum_{j=1}^{p}B_j(x_{ikj})^{\mathsf T}\theta_{ij}+\varepsilon_{ik}.
 ```
 
-For a predictor subset $S$, its row-level tensor basis is
+Thus the subject-level design is $[1,\ B_1(x_{i1}),\ldots,B_p(x_{ip})]$, and
+each subject has $1+pq$ coefficients. Each predictor uses its own pooled value
+range to define common spline knots across subjects. Fusion is applied jointly
+to the intercept and all predictor-specific spline coefficients. No time
+variable is required for this interface.
+
+The interaction order is controlled by `max_tensor_order`. For every predictor
+subset $S\subseteq\{1,\ldots,p\}$ satisfying
+$1\le |S|\le R$, where $R$ is the selected maximum order, the design includes
+$\bigotimes_{j\in S}B_j(x_j)$. Consequently,
 
 ```math
-\phi_S(x_{ik})=\bigotimes_{j\in S}B_j(x_{ikj}).
+y_{ik}=\alpha_i+\sum_{1\le |S|\le R}\left\langle\Theta_{iS},\bigotimes_{j\in S}B_j(x_{ikj})\right\rangle+\varepsilon_{ik}.
 ```
 
-The complete feature row and subject-specific model are
+`max_tensor_order=1` gives the additive model, `max_tensor_order=2` adds every
+pairwise tensor interaction for any number of predictors, and
+`max_tensor_order=None` expands through the full $p$-way interaction. With $q$
+spline terms per predictor and an intercept, the coefficient dimension is
+$\sum_{r=0}^{R}\binom{p}{r}q^r$; the unrestricted case has $(1+q)^p$ columns.
 
-```math
-d_{ik}^{\mathsf T}=\left[1,\left\{\phi_S(x_{ik})^{\mathsf T}:S\in\mathcal S_R\right\}\right],
-```
-
-```math
-y_{ik}=d_{ik}^{\mathsf T}\theta_i+\varepsilon_{ik}
-=\alpha_i+\sum_{S\in\mathcal S_R}\left\langle\Theta_{iS},\phi_S(x_{ik})\right\rangle+\varepsilon_{ik}.
-```
-
-Stacking the rows gives $y_i=D_i\theta_i+\varepsilon_i$. With $q$ spline terms
-per predictor and an intercept, the coefficient dimension is
-
-```math
-d_R=1+\sum_{r=1}^{R}\binom{p}{r}q^r.
-```
-
-`max_tensor_order=1` gives an additive model, `max_tensor_order=2` includes all
-pairwise tensor interactions, and `max_tensor_order=None` sets $R=p$ and yields
-$d_p=(1+q)^p$.
-
-### Working covariance and pre-whitening
-
-Within-subject dependence is represented by a positive-definite working
-covariance matrix $V_i$. Writing $V_i=L_iL_i^{\mathsf T}$, define
-
-```math
-\widetilde y_i=L_i^{-1}y_i,\qquad \widetilde D_i=L_i^{-1}D_i.
-```
-
-Users may supply $V_i$ directly. Otherwise, the package constructs a
-residual-based AR(1) working covariance estimate. Supplying identity matrices
-gives working independence, as used in the synthetic example.
+Within-subject dependence is represented by a working covariance matrix
+$V_i$. Writing $V_i=L_iL_i^{\mathsf T}$, the solver pre-whitens each subject as
+$\widetilde y_i=L_i^{-1}y_i$ and $\widetilde X_i=L_i^{-1}X_i$. Covariance
+matrices may be supplied by the user. Otherwise, the package constructs a
+residual-based AR(1) working covariance estimate.
 
 ### Robust fusion objective
 
-The subject-specific coefficients are estimated jointly by minimizing
+The fitted coefficient vectors minimize
 
 ```math
-\min_{\theta_1,\ldots,\theta_n}
-\sum_{i=1}^{n}\sum_{k=1}^{T_i}
-\rho_c\!\left(\widetilde y_{ik}-\widetilde d_{ik}^{\mathsf T}\theta_i\right)
-+\sum_{1\le i<j\le n}p_\lambda\!\left(\lVert\theta_i-\theta_j\rVert_2\right).
+\sum_{i=1}^{n}\sum_{t=1}^{T_i}\rho_c\!\left(\widetilde{y}_{it}-\widetilde{x}_{it}^{\mathsf{T}}\beta_i\right)+\sum_{i\lt j}p_\lambda\!\left(\lVert\beta_i-\beta_j\rVert_2\right)
 ```
 
-The Huber loss is
+The Huber loss is quadratic for central residuals and linear in the tails:
+$\rho_c(r)=r^2/2$ when $|r|\le c$, and
+$\rho_c(r)=c|r|-c^2/2$ when $|r|\gt c$. Consequently, ordinary residuals retain
+their usual quadratic contribution, whereas the influence of a large residual
+grows only linearly.
 
-```math
-\rho_c(r)=
-\begin{cases}
-r^2/2, & |r|\le c,\\
-c|r|-c^2/2, & |r|>c.
-\end{cases}
-```
+Let $u_{ij}=\lVert\beta_i-\beta_j\rVert_2$. Two pairwise fusion penalties are
+available:
 
-It retains quadratic efficiency for ordinary residuals while limiting the
-influence of large residuals. Two fusion penalties are available. Writing
-$u=\lVert\theta_i-\theta_j\rVert_2$,
+- **L2 fusion:** $p_\lambda(u)=\lambda u$, which applies group soft-thresholding
+  to coefficient differences.
+- **MCP fusion:** $p_{\lambda,\gamma}(u)=\lambda u-u^2/(2\gamma)$ for
+  $0\le u\le\gamma\lambda$, and $p_{\lambda,\gamma}(u)=\gamma\lambda^2/2$
+  beyond that range. MCP reduces the shrinkage bias on well-separated
+  coefficient vectors.
 
-```math
-p_\lambda^{\mathrm{L2}}(u)=\lambda u,
-```
-
-and
-
-```math
-p_{\lambda,\gamma}^{\mathrm{MCP}}(u)=
-\begin{cases}
-\lambda u-u^2/(2\gamma), & 0\le u\le\gamma\lambda,\\
-\gamma\lambda^2/2, & u>\gamma\lambda.
-\end{cases}
-```
-
-The complete subject graph contains one edge for every pair $(i,j)$. Shrinking
-$\theta_i-\theta_j$ to zero makes the two subjects share the same fitted
-response surface, so the subgroup structure emerges without specifying the
-number of groups in advance.
+The implementation uses a complete fusion graph, so every pair of subjects is
+connected by one penalty term. When a difference is shrunk to zero, the two
+subjects share the same fitted trajectory representation. This allows the
+number of groups to emerge from the fitted coefficients rather than being
+specified in advance.
 
 ### ADMM optimization
 
-Let $A\in\mathbb R^{m\times n}$ be the incidence matrix of the complete graph,
-$m=\binom n2$, and let $\Theta$ stack the subject coefficients by row. ADMM
-introduces $Q=A\Theta$ and a scaled dual variable $U$. Each iteration performs:
+Let $A$ be the incidence matrix of the complete subject graph and let $B$ stack
+the subject-specific coefficient vectors by row. The solver introduces edge
+variables $Z=AB$ and scaled dual variables $U$. Each ADMM iteration performs:
 
-1. **Robust coefficient update.** Huber weights are updated by IRLS. The
-   resulting system combines subject-level weighted normal equations with the
-   graph Laplacian $A^{\mathsf T}A$ and is solved by conjugate gradients.
-2. **Fusion update.** Each edge row of $A\Theta+U$ is passed through the group
-   L2 or group MCP proximal operator.
-3. **Dual update.** $U\leftarrow U+A\Theta-Q$.
+1. **Coefficient update.** The Huber term is approximated by iteratively
+   reweighted least squares (IRLS). The resulting coupled linear system combines
+   the subject-specific weighted normal equations with the graph Laplacian
+   $A^{\mathsf T}A$ and is solved by conjugate gradients. Subjects may have
+   different numbers of observations.
+2. **Fusion update.** Each row of $AB+U$ is passed through either the group L2
+   shrinkage operator or the group MCP proximal operator.
+3. **Dual update.** The scaled dual variable is updated as
+   $U\leftarrow U+AB-Z$.
 
-Iterations stop when the primal and dual residuals satisfy the configured
-tolerances or when `max_admm` is reached.
+Iterations stop when both the primal residual $AB-Z$ and the dual residual
+$\rho A^{\mathsf T}(Z-Z_{\mathrm{previous}})$ fall below their configured
+tolerances, or when the maximum number of ADMM iterations is reached.
 
-### Cluster extraction and lambda selection
+### Cluster extraction
 
-For a fitted $\widehat\Theta(\lambda)$, subjects are connected when
+After optimization, subjects are connected when the Euclidean distance between
+their fitted coefficient vectors is no greater than `tau_cluster`. By default,
+connected components of this threshold graph define the cluster labels.
+Clusters smaller than `min_cluster_size` are merged into the nearest sufficiently
+large cluster in coefficient space.
 
-```math
-\lVert\widehat\theta_i(\lambda)-\widehat\theta_j(\lambda)\rVert_2\le\tau.
-```
+### Selecting the fusion strength
 
-Connected components define the initial clusters; undersized clusters are
-merged according to `min_cluster_size`. For every candidate in `lam_grid`, the
-model is refitted and labels are extracted. The Calinski-Harabasz score is then
-computed in the initial subject-level least-squares coefficient space using
-those labels:
-
-```math
-\operatorname{CH}(\lambda)=
-\frac{\operatorname{between}(\lambda)/(K_\lambda-1)}
-{\operatorname{within}(\lambda)/(n-K_\lambda)}.
-```
-
-The selected value is the grid candidate with the largest CH score. Candidate
-fits can run in parallel through `ch_n_jobs`.
+The package evaluates every value in `lam_grid`. For each candidate $\lambda$,
+it refits the model, extracts clusters, and computes a Calinski-Harabasz score
+in subject-level coefficient space. Degenerate one-cluster and all-singleton
+solutions are excluded from selection, and the candidate with the largest
+valid score is returned. Candidate values can be evaluated in parallel through
+`ch_n_jobs`.
 
 ## Features
 
@@ -182,42 +148,31 @@ Python 3.10 or newer is required.
 
 ```python
 import numpy as np
-from sklearn.metrics import normalized_mutual_info_score, rand_score
 
 from huber_fusion_clustering import ADMMClusterConfig, HuberFusionClusterer
 
-rng = np.random.default_rng(20260717)
-n_per_group = 30
-n_subjects = 3 * n_per_group
-n_observations = 120
+rng = np.random.default_rng(42)
+n_subjects = 60
+n_observations = 50
 
-covariates = rng.uniform(-1.5, 1.5, size=(n_subjects, n_observations, 2))
+covariates = rng.uniform(-1.0, 1.0, size=(n_subjects, n_observations, 2))
+group = np.repeat([0, 1], n_subjects // 2)
 x1 = covariates[:, :, 0]
 x2 = covariates[:, :, 1]
-
-mean_1 = x1 + x1 * x2 + x2**2
-mean_2 = np.sin(x1) + np.cos(x1 * x2) + x2
-mean_3 = x1**2 - np.sin(x2) - x1 * x2
-
-y = np.vstack(
-    [
-        mean_1[:n_per_group],
-        mean_2[n_per_group : 2 * n_per_group],
-        mean_3[2 * n_per_group :],
-    ]
-)
+mean_a = 0.4 + 0.9 * x1 + 0.3 * x1**2 - 0.6 * x2 + 0.8 * x1 * x2
+mean_b = 1.4 - 0.8 * x1 + 0.2 * x1**2 + 0.7 * x2 - 0.8 * x1 * x2
+y = np.where(group[:, None] == 0, mean_a, mean_b)
 y += rng.normal(0.0, 0.08, size=y.shape)
-true_labels = np.repeat(np.arange(3), n_per_group)
 
 config = ADMMClusterConfig(
     lam_grid=np.linspace(0.0001, 1.0, 30).tolist(),
-    df=6,
-    degree=3,
+    df=4,
+    degree=2,
     max_tensor_order=2,
-    tau_cluster=1.0,
+    tau_cluster=0.20,
     min_cluster_size=2,
     max_admm=150,
-    ch_n_jobs=-1,
+    ch_n_jobs=1,
     verbose=0,
 )
 
@@ -229,18 +184,13 @@ labels = model.fit_predict(
 )
 
 print("Selected lambda:", model.result_.best_lambda)
-print("Number of clusters:", model.result_.n_clusters)
-print("Cluster sizes:", np.bincount(labels).tolist())
-print("Rand index:", rand_score(true_labels, labels))
-print("NMI:", normalized_mutual_info_score(true_labels, labels))
+print("Cluster labels:", labels)
+print("Coefficient blocks:", model.result_.coefficient_blocks().shape)
+print("Interaction block:", model.result_.tensor_coefficient_blocks()[(0, 1)].shape)
 ```
 
 A complete runnable version is available in
-[`examples/synthetic_demo.py`](examples/synthetic_demo.py). It generates
-subject-specific predictor values, exercises nonlinear main effects and an
-$x_1x_2$ interaction, and reports recovery against the known three-group
-partition. On the reference seed, the fitted model recovers 30 subjects in
-each group with Rand index and normalized mutual information equal to 1.
+[`examples/synthetic_demo.py`](examples/synthetic_demo.py).
 
 ## Main API
 
