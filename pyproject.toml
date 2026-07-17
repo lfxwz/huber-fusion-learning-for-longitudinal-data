@@ -31,7 +31,16 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/lfxwz/huber-fusion-learning-for-longitudinal-data"
 Repository = "https://github.com/lfxwz/huber-fusion-learning-for-longitudinal-data"
+Issues = "https://github.com/lfxwz/huber-fusion-learning-for-longitudinal-data/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]

@@ -1,12 +1,33 @@
 # Huber Fusion Learning for Longitudinal Data
 
-`huber-fusion-clustering` is a small Python package for robust subgroup
-discovery in longitudinal data. It combines a Huber-loss objective with fusion
-penalties and solves the resulting optimization problem with ADMM.
+[![Tests](https://github.com/lfxwz/huber-fusion-learning-for-longitudinal-data/actions/workflows/tests.yml/badge.svg)](https://github.com/lfxwz/huber-fusion-learning-for-longitudinal-data/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/python-3.10--3.13-blue)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-The project is designed for subject-specific trajectories. Each subject has a
-coefficient vector, and subjects with similar fitted coefficients are fused
-into the same cluster.
+`huber-fusion-clustering` discovers robust subgroups in longitudinal data by
+combining Huber loss, subject-level fusion penalties, spline representations,
+and ADMM optimization. It supports time-only trajectories, prebuilt design
+matrices, and multivariable spline models with configurable tensor interactions.
+
+Use this package when you need clusters of subjects with similar fitted
+trajectories, want the number of clusters to emerge from coefficient fusion,
+and need reduced sensitivity to outlying observations.
+
+For a smaller package restricted to one-dimensional time trajectories, see
+[`huber-spline-fusion-clustering`](https://github.com/lfxwz/huber-spline-fusion-clustering).
+
+[Quick start](#quick-start) · [Method](#method) · [Main API](#main-api) ·
+[Input formats](#input-formats) · [Testing](#testing) · [Limitations](#limitations)
+
+## Why this package?
+
+- **Robust fitting:** Huber loss limits the influence of large residuals.
+- **Data-driven subgroups:** fusion penalties estimate clusters without a
+  preselected number of groups.
+- **Flexible trajectories:** use time splines, custom design matrices, additive
+  predictor effects, or tensor-product interactions.
+- **Research-friendly interface:** obtain labels, fitted coefficients,
+  coefficient blocks, diagnostics, and reproducible contamination utilities.
 
 ## Method
 
@@ -295,6 +316,18 @@ whether the input contains 2, 10, or 20 predictors. Set it to `None` to include
 all orders. Predictor indices in `tensor_coefficient_blocks()` are zero based:
 `(0,)` is the first main effect, `(0, 1)` is the first-second interaction, and
 `(0, 1, 2)` is the corresponding three-way interaction when enabled.
+
+## Testing
+
+Install the package with its test dependency and run the suite:
+
+```bash
+python -m pip install -e ".[test]"
+python -m pytest
+```
+
+GitHub Actions runs the same tests on Python 3.10, 3.11, 3.12, and 3.13 for
+every pull request and every push to `main`.
 
 ## Data policy
 
