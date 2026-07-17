@@ -192,6 +192,61 @@ print("Interaction block:", model.result_.tensor_coefficient_blocks()[(0, 1)].sh
 A complete runnable version is available in
 [`examples/synthetic_demo.py`](examples/synthetic_demo.py).
 
+### Mathematics of the three-group example
+
+The runnable example is more demanding than the compact two-group snippet
+above. It generates $n=90$ subjects, with 30 subjects in each latent group and
+$T=120$ observations per subject. Predictor values vary across both subjects
+and observations:
+
+```math
+x_{ik1},x_{ik2}\overset{\mathrm{iid}}{\sim}\operatorname{Uniform}(-1.5,1.5),
+\qquad
+\varepsilon_{ik}\overset{\mathrm{iid}}{\sim}\mathcal N(0,0.08^2).
+```
+
+If $g_i\in\{1,2,3\}$ is the unknown group of subject $i$, the response is
+
+```math
+y_{ik}=f_{g_i}(x_{ik1},x_{ik2})+\varepsilon_{ik},
+```
+
+where the three group-specific response surfaces are
+
+```math
+\begin{aligned}
+f_1(x_1,x_2)&=x_1+x_1x_2+x_2^2,\\
+f_2(x_1,x_2)&=\sin(x_1)+\cos(x_1x_2)+x_2,\\
+f_3(x_1,x_2)&=x_1^2-\sin(x_2)-x_1x_2.
+\end{aligned}
+```
+
+The terms $x_1x_2$ and $\cos(x_1x_2)$ make the response genuinely
+non-additive: their effect cannot generally be written as a sum
+$h_1(x_1)+h_2(x_2)$. With `df=6` and `max_tensor_order=2`, the fitted row-level
+design is
+
+```math
+d(x_1,x_2)^{\mathsf T}
+=\left[1,\ B_1(x_1)^{\mathsf T},\ B_2(x_2)^{\mathsf T},
+\{B_1(x_1)\otimes B_2(x_2)\}^{\mathsf T}\right].
+```
+
+It therefore has $1+6+6+6^2=49$ columns. The two main-effect blocks represent
+smooth changes in one predictor at a time, while the $6\times6$ tensor block
+approximates the full pairwise response surface, including both simple and
+nonlinear interactions.
+
+Each subject receives its own 49-dimensional coefficient vector. The fusion
+penalty pulls together subjects with similar estimated surfaces, and the
+resulting fused coefficient vectors determine the clusters. The example scans
+30 values of $\lambda$ from $0.0001$ to $1$, selects the candidate with the
+largest Calinski-Harabasz score, and extracts clusters using
+`tau_cluster=1.0`. With the bundled random seed, it selects
+$\lambda=0.413852$ and exactly recovers three clusters of sizes
+$(30,30,30)$, with Rand index and normalized mutual information both equal to
+1.
+
 ## Main API
 
 - `HuberFusionClusterer`: high-level `fit` and `fit_predict` interface
