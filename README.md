@@ -19,10 +19,10 @@ model is $y_i\approx X_i\beta_i$. When only observation times are supplied,
 the package constructs a B-spline design matrix; a prebuilt design matrix can
 also be passed directly.
 
-For a univariate response with $p$ predictors, the package can construct an
-additive-spline design automatically. Let $B_j(x)$ contain $q$ identifiable
-B-spline terms for predictor $j$. For observation $k$ from subject $i$, the
-model is
+For a univariate response with $p$ predictors, the package can construct a
+multivariable spline and tensor-product design automatically. Let $B_j(x)$
+contain $q$ identifiable B-spline terms for predictor $j$. For observation $k$
+from subject $i$, the model is
 
 ```math
 y_{ik}=\alpha_i+\sum_{j=1}^{p}B_j(x_{ikj})^{\mathsf T}\theta_{ij}+\varepsilon_{ik}.
@@ -148,45 +148,61 @@ Python 3.10 or newer is required.
 
 ```python
 import numpy as np
+from sklearn.metrics import normalized_mutual_info_score, rand_score
 
 from huber_fusion_clustering import ADMMClusterConfig, HuberFusionClusterer
 
-rng = np.random.default_rng(42)
-n_subjects = 60
-n_observations = 50
+rng = np.random.default_rng(20260717)
+n_per_group = 30
+n_groups = 3
+n_subjects = n_groups * n_per_group
+n_observations = 120
 
-covariates = rng.uniform(-1.0, 1.0, size=(n_subjects, n_observations, 2))
-group = np.repeat([0, 1], n_subjects // 2)
+covariates = rng.uniform(-1.5, 1.5, size=(n_subjects, n_observations, 2))
 x1 = covariates[:, :, 0]
 x2 = covariates[:, :, 1]
-mean_a = 0.4 + 0.9 * x1 + 0.3 * x1**2 - 0.6 * x2 + 0.8 * x1 * x2
-mean_b = 1.4 - 0.8 * x1 + 0.2 * x1**2 + 0.7 * x2 - 0.8 * x1 * x2
-y = np.where(group[:, None] == 0, mean_a, mean_b)
-y += rng.normal(0.0, 0.08, size=y.shape)
+
+mean_group_1 = x1 + x1 * x2 + x2**2
+mean_group_2 = np.sin(x1) + np.cos(x1 * x2) + x2
+mean_group_3 = x1**2 - np.sin(x2) - x1 * x2
+
+responses = np.vstack(
+    [
+        mean_group_1[:n_per_group],
+        mean_group_2[n_per_group : 2 * n_per_group],
+        mean_group_3[2 * n_per_group :],
+    ]
+)
+responses += rng.normal(0.0, 0.08, size=responses.shape)
+true_labels = np.repeat(np.arange(n_groups), n_per_group)
 
 config = ADMMClusterConfig(
     lam_grid=np.linspace(0.0001, 1.0, 30).tolist(),
-    df=4,
-    degree=2,
+    df=6,
+    degree=3,
     max_tensor_order=2,
-    tau_cluster=0.20,
+    tau_cluster=1.0,
     min_cluster_size=2,
     max_admm=150,
-    ch_n_jobs=1,
+    ch_n_jobs=-1,
     verbose=0,
 )
 
 model = HuberFusionClusterer(config)
 labels = model.fit_predict(
-    y=y,
+    y=responses,
     covariates=covariates,
     V=np.eye(n_observations),
 )
 
-print("Selected lambda:", model.result_.best_lambda)
-print("Cluster labels:", labels)
-print("Coefficient blocks:", model.result_.coefficient_blocks().shape)
-print("Interaction block:", model.result_.tensor_coefficient_blocks()[(0, 1)].shape)
+print(f"Selected lambda: {model.result_.best_lambda:.6f}")
+print(f"Number of clusters: {model.result_.n_clusters}")
+print(f"Cluster sizes: {np.bincount(labels).tolist()}")
+print(f"Rand index: {rand_score(true_labels, labels):.6f}")
+print(
+    "Normalized mutual information: "
+    f"{normalized_mutual_info_score(true_labels, labels):.6f}"
+)
 ```
 
 A complete runnable version is available in
@@ -194,10 +210,9 @@ A complete runnable version is available in
 
 ### Mathematics of the three-group example
 
-The runnable example is more demanding than the compact two-group snippet
-above. It generates $n=90$ subjects, with 30 subjects in each latent group and
-$T=120$ observations per subject. Predictor values vary across both subjects
-and observations:
+The quick start and runnable example generate $n=90$ subjects, with 30 subjects
+in each latent group and $T=120$ observations per subject. Predictor values
+vary across both subjects and observations:
 
 ```math
 x_{ik1},x_{ik2}\overset{\mathrm{iid}}{\sim}\operatorname{Uniform}(-1.5,1.5),
@@ -267,13 +282,13 @@ Responses may be supplied as either:
 Time points and covariance matrices may likewise be common across subjects or
 provided separately for each subject.
 
-Raw predictors for the additive-spline interface may be supplied as a
-three-dimensional array with shape `(n_subjects, n_observations, n_predictors)`,
-a common matrix with shape `(n_observations, n_predictors)`, or a list of
-subject-specific matrices with shape `(n_observations_i, n_predictors)`. Pass
-these as `covariates=` without `t=`. The existing `t=` interface remains
-available for a time-only spline model, and `X=` remains available for an
-already constructed design matrix.
+Raw predictors for the multivariable spline and tensor-product interface may be
+supplied as a three-dimensional array with shape
+`(n_subjects, n_observations, n_predictors)`, a common matrix with shape
+`(n_observations, n_predictors)`, or a list of subject-specific matrices with
+shape `(n_observations_i, n_predictors)`. Pass these as `covariates=` without
+`t=`. The existing `t=` interface remains available for a time-only spline
+model, and `X=` remains available for an already constructed design matrix.
 
 Use `max_tensor_order=2` to include every pairwise tensor block regardless of
 whether the input contains 2, 10, or 20 predictors. Set it to `None` to include
