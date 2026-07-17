@@ -215,7 +215,7 @@ in each latent group and $T=120$ observations per subject. Predictor values
 vary across both subjects and observations:
 
 ```math
-x_{ik1},x_{ik2}\overset{\mathrm{iid}}{\sim}\operatorname{Uniform}(-1.5,1.5),
+x_{ik1},x_{ik2}\overset{\mathrm{iid}}{\sim}\mathrm{Uniform}(-1.5,1.5),
 \qquad
 \varepsilon_{ik}\overset{\mathrm{iid}}{\sim}\mathcal N(0,0.08^2).
 ```
