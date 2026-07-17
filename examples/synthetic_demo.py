@@ -1,60 +1,50 @@
-"""Run fusion clustering with adaptive pairwise tensor-product splines."""
+"""Recover three nonlinear subgroups with tensor-product spline effects."""
 
 from __future__ import annotations
 
 import numpy as np
+from sklearn.metrics import normalized_mutual_info_score, rand_score
 
 from huber_fusion_clustering import ADMMClusterConfig, HuberFusionClusterer
 
 
 def make_synthetic_data(
-    random_state: int = 42,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Create two groups with main effects and pairwise interactions."""
+    random_state: int = 20260717,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Create three groups with nonlinear main and interaction effects."""
     rng = np.random.default_rng(random_state)
     n_per_group = 30
-    n_subjects = 2 * n_per_group
-    n_observations = 100
-    covariates = rng.uniform(-1.0, 1.0, size=(n_subjects, n_observations, 3))
+    n_groups = 3
+    n_subjects = n_groups * n_per_group
+    n_observations = 120
+    covariates = rng.uniform(-1.5, 1.5, size=(n_subjects, n_observations, 2))
     x1 = covariates[:, :, 0]
     x2 = covariates[:, :, 1]
-    x3 = covariates[:, :, 2]
 
-    group_a = (
-        0.4
-        + 0.9 * x1
-        + 0.3 * x1**2
-        - 0.6 * x2
-        + 0.4 * x2**2
-        + 0.5 * x3
-        + 0.3 * x3**2
-        + 0.7 * x1 * x2
-        - 0.5 * x2 * x3
+    mean_group_1 = x1 + x1 * x2 + x2**2
+    mean_group_2 = np.sin(x1) + np.cos(x1 * x2) + x2
+    mean_group_3 = x1**2 - np.sin(x2) - x1 * x2
+
+    responses = np.vstack(
+        [
+            mean_group_1[:n_per_group],
+            mean_group_2[n_per_group : 2 * n_per_group],
+            mean_group_3[2 * n_per_group :],
+        ]
     )
-    group_b = (
-        1.4
-        - 0.8 * x1
-        + 0.2 * x1**2
-        + 0.7 * x2
-        - 0.3 * x2**2
-        - 0.5 * x3
-        + 0.6 * x3**2
-        - 0.6 * x1 * x2
-        + 0.6 * x1 * x3
-    )
-    responses = np.vstack([group_a[:n_per_group], group_b[n_per_group:]])
     responses += rng.normal(0.0, 0.08, size=responses.shape)
-    return responses, covariates
+    true_labels = np.repeat(np.arange(n_groups), n_per_group)
+    return responses, covariates, true_labels
 
 
 def main() -> None:
-    responses, covariates = make_synthetic_data()
+    responses, covariates, true_labels = make_synthetic_data()
     config = ADMMClusterConfig(
         lam_grid=np.linspace(0.0001, 1.0, 30).tolist(),
-        df=3,
-        degree=2,
+        df=6,
+        degree=3,
         max_tensor_order=2,
-        tau_cluster=0.20,
+        tau_cluster=1.0,
         min_cluster_size=2,
         max_admm=150,
         ch_n_jobs=-1,
@@ -77,9 +67,15 @@ def main() -> None:
     print(f"Design shape per subject: {model.result_.xlist[0].shape}")
     print(f"Coefficient blocks: {coefficient_blocks.shape} (subjects, functions, basis)")
     print(f"Pairwise block: {tensor_blocks[(0, 1)].shape}")
-    print(f"Selected lambda: {model.result_.best_lambda:.3f}")
+    print(f"Selected lambda: {model.result_.best_lambda:.6f}")
+    print(f"Best CH score: {model.result_.best_ch:.6f}")
     print(f"Number of clusters: {model.result_.n_clusters}")
     print(f"Cluster sizes: {counts.tolist()}")
+    print(f"Rand index: {rand_score(true_labels, labels):.6f}")
+    print(
+        "Normalized mutual information: "
+        f"{normalized_mutual_info_score(true_labels, labels):.6f}"
+    )
 
 
 if __name__ == "__main__":
