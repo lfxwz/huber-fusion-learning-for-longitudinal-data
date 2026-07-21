@@ -1,6 +1,6 @@
 """Loss-based robust fusion clustering with Huber loss and ADMM."""
 
-from .clustering import cluster_by_threshold
+from .clustering import cluster_by_threshold, relabel_consecutive
 from .contamination import inject_outliers
 from .interface import (
     ADMMClusterConfig,
@@ -15,6 +15,7 @@ from .model_selection import (
     merge_small_clusters,
     select_lambda_by_ch,
 )
+from .diagnostics import plot_convergence, print_convergence_summary
 from .solver import admm_huber_fusion
 
 __version__ = "0.1.0"
@@ -31,5 +32,8 @@ __all__ = [
     "initial_subject_ols",
     "inject_outliers",
     "merge_small_clusters",
+    "plot_convergence",
+    "print_convergence_summary",
+    "relabel_consecutive",
     "select_lambda_by_ch",
 ]

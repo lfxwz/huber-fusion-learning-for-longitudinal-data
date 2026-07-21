@@ -112,9 +112,7 @@ def _greedy_radius_clustering(
 
 
 def _compact_labels(labels: np.ndarray) -> np.ndarray:
-    unique_labels = np.unique(labels)
-    mapping = {old: new for new, old in enumerate(unique_labels)}
-    return np.asarray([mapping[value] for value in labels], dtype=int)
+    return relabel_consecutive(labels)
 
 
 def _cluster_centroids(coefficients: np.ndarray, labels: np.ndarray) -> np.ndarray:
@@ -176,6 +174,7 @@ def _enforce_min_cluster_size(
 
 
 def _cluster_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Permutation-invariant accuracy via Hungarian algorithm."""
     y_true = np.asarray(y_true).ravel()
     y_pred = np.asarray(y_pred).ravel()
     true_classes = np.unique(y_true)
@@ -189,6 +188,14 @@ def _cluster_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
     rows, columns = linear_sum_assignment(-confusion)
     return float(confusion[rows, columns].sum() / len(y_true))
+
+
+def relabel_consecutive(labels: np.ndarray) -> np.ndarray:
+    """Map arbitrary labels to consecutive integers 0..K-1."""
+    labels_arr = np.asarray(labels)
+    uniq = np.unique(labels_arr)
+    mapping = {old: new for new, old in enumerate(uniq)}
+    return np.array([mapping[int(v)] for v in labels_arr], dtype=int)
 
 
 def cluster_by_threshold(

@@ -5,9 +5,9 @@ from itertools import combinations
 from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
-from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import normalized_mutual_info_score, rand_score
 
+from .clustering import _cluster_accuracy
 from .model_selection import select_lambda_by_ch
 
 
@@ -773,17 +773,3 @@ def _cluster_metrics(true_labels: Optional[Sequence[int]], labels: np.ndarray) -
     metrics["nmi"] = float(normalized_mutual_info_score(y_true, labels, average_method="min"))
     metrics["acc"] = float(_cluster_accuracy(y_true, labels)) if k_pred == k_true else np.nan
     return metrics
-
-
-def _cluster_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    true_classes = np.unique(y_true)
-    pred_classes = np.unique(y_pred)
-    conf = np.zeros((len(true_classes), len(pred_classes)), dtype=int)
-
-    for i, true_class in enumerate(true_classes):
-        true_mask = y_true == true_class
-        for j, pred_class in enumerate(pred_classes):
-            conf[i, j] = int(np.sum(true_mask & (y_pred == pred_class)))
-
-    row_ind, col_ind = linear_sum_assignment(-conf)
-    return float(conf[row_ind, col_ind].sum() / y_true.size)
