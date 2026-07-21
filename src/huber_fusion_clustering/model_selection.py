@@ -9,8 +9,8 @@ import numpy as np
 from sklearn.metrics import calinski_harabasz_score
 from joblib import Parallel, delayed
 
+from .clustering import cluster_by_threshold, relabel_consecutive
 from .solver import admm_huber_fusion
-from .clustering import cluster_by_threshold
 
 
 ArrayLike = np.ndarray
@@ -67,13 +67,6 @@ def initial_subject_ols(xlist: Sequence[ArrayLike], ylist: Sequence[ArrayLike]) 
 
     beta_init = np.vstack(beta_rows)
     return beta_init
-
-
-def relabel_consecutive(labels: Sequence[int]) -> np.ndarray:
-    labels_arr = np.asarray(labels)
-    uniq = np.unique(labels_arr)
-    mapping = {old: new for new, old in enumerate(uniq)}
-    return np.array([mapping[int(v)] for v in labels_arr], dtype=int)
 
 
 def merge_small_clusters(

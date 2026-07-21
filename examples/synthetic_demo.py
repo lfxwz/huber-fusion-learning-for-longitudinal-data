@@ -40,7 +40,7 @@ def make_synthetic_data(
 def main() -> None:
     responses, covariates, true_labels = make_synthetic_data()
     config = ADMMClusterConfig(
-        lam_grid=np.linspace(0.0001, 1.0, 30).tolist(),
+        lam_grid=np.linspace(0.0001, 2.0, 30).tolist(),
         df=6,
         degree=3,
         max_tensor_order=2,
