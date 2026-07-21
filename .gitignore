@@ -1,0 +1,17 @@
+# Allowlist only the files intended for public release.
+*
+
+!.gitignore
+!LICENSE
+!README.md
+!pyproject.toml
+!src/
+!src/huber_fusion_clustering/
+!src/huber_fusion_clustering/*.py
+!examples/
+!examples/synthetic_demo.py
+!tests/
+!tests/*.py
+!.github/
+!.github/workflows/
+!.github/workflows/tests.yml
