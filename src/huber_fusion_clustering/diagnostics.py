@@ -8,7 +8,7 @@ import numpy as np
 
 
 def plot_convergence(
-    history: Sequence[tuple[float, float, float, float]] | Dict[str, Any],
+    history: Any,
     *,
     ax: Optional[Any] = None,
     figsize: tuple[float, float] = (10, 4),
@@ -22,7 +22,8 @@ def plot_convergence(
     history
         Either the ``history`` list from ``admm_huber_fusion`` (tuples of
         ``(r_norm, s_norm, eps_pri, eps_dual)``), or the ``info`` dict that
-        contains it, or an ``ADMMClusterResult``.
+        contains it, an ``ADMMClusterResult``, or a fitted
+        ``HuberFusionClusterer``.
     ax
         Optional matplotlib Axes. If None, a new figure is created.
     figsize
@@ -44,10 +45,13 @@ def plot_convergence(
             "Install it with: pip install matplotlib"
         ) from exc
 
-    # Unpack history from various input types
     hist = _extract_history(history)
     if not hist:
-        raise ValueError("history is empty; nothing to plot.")
+        raise ValueError(
+            "No ADMM residual history found. Pass solver info, result.info, "
+            "an ADMMClusterResult, a fitted HuberFusionClusterer, or a raw "
+            "residual history."
+        )
 
     iters = np.arange(1, len(hist) + 1)
     r_norms = np.array([h[0] for h in hist])
@@ -109,10 +113,16 @@ def print_convergence_summary(
         print("No convergence history available.")
         return
 
-    print(f"ADMM converged in {info['iter']} iterations")
+    converged = (
+        info["r_norm"] <= info["eps_pri"]
+        and info["s_norm"] <= info["eps_dual"]
+    )
+    iterations = int(info["iter"])
+    iteration_label = "iteration" if iterations == 1 else "iterations"
+    outcome = "converged" if converged else "stopped"
+    print(f"ADMM {outcome} after {iterations} {iteration_label}")
     print(f"Final primal residual: {info['r_norm']:.3e} (tol: {info['eps_pri']:.3e})")
     print(f"Final dual residual:   {info['s_norm']:.3e} (tol: {info['eps_dual']:.3e})")
-    converged = info["r_norm"] <= info["eps_pri"] and info["s_norm"] <= info["eps_dual"]
     print(f"Status: {'CONVERGED' if converged else 'NOT CONVERGED (max iter reached)'}")
 
     if len(history) > last_k:
@@ -128,33 +138,42 @@ def print_convergence_summary(
 
 
 def _extract_history(
-    history: Sequence[tuple[float, float, float, float]] | Dict[str, Any],
+    history: Any,
 ) -> list[tuple[float, float, float, float]]:
-    """Extract the raw history list from various input types."""
-    # ADMMClusterResult
-    if hasattr(history, "history"):
-        result = getattr(history, "result_", None)
-        if result is not None and hasattr(result, "info"):
-            info = result.info
-            if isinstance(info, dict) and "history" in info:
-                return list(info["history"])
-        hist = getattr(history, "history", None)
-        if hist is not None:
-            return list(hist)
+    """Extract and validate ADMM residual history from supported inputs.
 
-    # info dict
-    if isinstance(history, dict):
-        if "history" in history:
-            return list(history["history"])
-        # Maybe it's already a history list stored under a key
-        for value in history.values():
-            if isinstance(value, list) and value and isinstance(value[0], (tuple, list)):
-                if len(value[0]) == 4:
-                    return list(value)
+    ``ADMMClusterResult.history`` stores lambda-selection records, while the
+    residual history for the selected fit is stored in ``result.info``.  The
+    fitted-result path must therefore be resolved before falling back to an
+    object's generic ``history`` attribute.
+    """
+    candidate = history
+
+    fitted_result = getattr(candidate, "result_", None)
+    if fitted_result is not None:
+        candidate = fitted_result
+
+    info = getattr(candidate, "info", None)
+    if isinstance(info, dict) and "history" in info:
+        candidate = info["history"]
+    elif isinstance(candidate, dict):
+        candidate = candidate.get("history", [])
+    elif not isinstance(candidate, (list, tuple, np.ndarray)):
+        candidate = getattr(candidate, "history", [])
+
+    try:
+        rows = list(candidate)
+    except TypeError:
         return []
 
-    # Raw list of tuples
-    if isinstance(history, (list, tuple)):
-        return list(history)
+    normalized: list[tuple[float, float, float, float]] = []
+    for row in rows:
+        try:
+            values = tuple(float(value) for value in row)
+        except (TypeError, ValueError):
+            return []
+        if len(values) != 4:
+            return []
+        normalized.append(values)
 
-    return []
+    return normalized
